@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html>
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+	<head>
+		<title>Wind Farm Yaw</title>
+		<style>
+			body {
+				font-family: Arial, sans-serif;
+				padding: 20px;
+				background-color: #f0f2f5;
+				align-items: center;
+			}
+
+			form {
+				background: white;
+				padding: 20px;
+				border-radius: 8px;
+				box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+				width: 100%;
+				max-width:660px; /* Adjust the form width as needed */
+				margin: 20px auto;
+				display: flex;
+				align-items: center; /* Aligns items vertically centered */
+				justify-content: space-between; /* Distributes space between and around content items */
+			}
+
+			.form-group {
+				display: flex;
+				flex-direction: row; /* Sets a horizontal layout */
+				align-items: center;
+				margin-right: 10px; /* Space between groups */
+			}
+
+			.form-title {
+            	margin-right: 40px; /* Space between the title and the form */
+            	font-size: 24px; /* Larger text for the title */
+            	color: #222; /* Dark grey color for text */
+        	}	
+
+			.container {
+            	display: flex;
+            	flex-direction: row; 
+            	align-items: center; 
+            	margin-left: 20px; /* Margin to the left for some spacing from the body edge */
+        	}
+
+			label {
+				margin-right: 5px; /* Space between label and input */
+			}
+
+			input[type="number"], button {
+				padding: 10px;
+				margin-right: 10px; /* Space between inputs */
+				border: 1px solid #ccc;
+				border-radius: 4px;
+			}
+
+			input[type="number"]:focus {
+				border-color: #0056b3;
+				box-shadow: 0 0 5px rgba(0, 86, 179, 0.25);
+				outline: none;
+			}
+
+			button {
+				background-color: #007BFF;
+				color: white;
+				border: none;
+				cursor: pointer;
+				transition: background-color 0.3s, box-shadow 0.3s;
+			}
+
+			button:hover {
+				background-color: #0056b3;
+				box-shadow: 0 4px 8px rgba(0,123,255,0.5);
+			}
+		</style>
+	</head>
+	
+<body>
+
+		<h1>Add Turbine</h1>
+			<form id="parameterForm">
+				<div class="form-group">
+					<label for="x">X:</label>
+					<input type="number" id="x" name="x" style="width: 60px;">
+				</div>
+				<div class="form-group">
+					<label for="y">Y:</label>
+					<input type="number" id="y" name="y" style="width: 60px;">
+				</div>
+				<div class="form-group">
+					<label for="r">R:</label>
+					<input type="number" id="r" name="r" style="width: 60px;">
+				</div>
+				<div class="form-group">
+					<label for="yaw">yaw:</label>
+					<input type="number" id="yaw" name="yaw" style="width: 60px;">
+				</div>
+				<button type="button" onclick="AddTurbine()">Submit</button>
+			</form>
+		
+
+	<input type = "checkbox" id = "streamButton" onclick = "scene.showStreamlines = !scene.showStreamlines">Streamlines
+	<input type = "checkbox" id = "velocityButton" onclick = "scene.showVelocities = !scene.showVelocities">Velocities
+	<input type = "checkbox" name = "field" id = "pressureButton" onclick = "scene.showPressure = !scene.showPressure;"> Pressure
+	<input type = "checkbox" name = "field" id = "smokeButton" onclick = "scene.showSmoke = !scene.showSmoke;" checked>Smoke
+	<br>
+	<canvas id="myCanvas" style="border:2px solid"></canvas>
+	
+<script>
+
+	var canvas = document.getElementById("myCanvas");
+	var c = canvas.getContext("2d");	
+	canvas.width = window.innerWidth - 20;
+	canvas.height = window.innerHeight - 100;
+
+	canvas.focus();
+
+	var simHeight = 1.1;	
+	var cScale = canvas.height / simHeight;
+	var simWidth = canvas.width / cScale;
+
+	var U_FIELD = 0;
+	var V_FIELD = 1;
+	var S_FIELD = 2;
+
+	var cnt = 0;
+
+	function cX(x) {
+		return x * cScale;
+	}
+
+	function cY(y) {
+		return canvas.height - y * cScale;
+	}
+
+	// ----------------- start of simulator ------------------------------
+
+	class Fluid {
+		constructor(density, numX, numY, h) {
+			this.length = 1500; // Reference length.
+			this.velocity = 8; // Reference Velocity 
+			this.time = this.length/this.velocity; // Verify this. 
+			this.density = density;
+			this.numX = numX + 2; 
+			this.numY = numY + 2;
+			this.numCells = this.numX * this.numY;
+			this.h = h;
+			this.u = new Float32Array(this.numCells);
+			this.v = new Float32Array(this.numCells);
+			this.newU = new Float32Array(this.numCells);
+			this.newV = new Float32Array(this.numCells);
+			this.p = new Float32Array(this.numCells);
+			this.s = new Float32Array(this.numCells);
+			this.m = new Float32Array(this.numCells);
+			this.newM = new Float32Array(this.numCells);
+			this.m.fill(1.0)
+			var num = numX * numY;
+		}
+
+		integrate(dt, gravity) {
+			var n = this.numY;
+			for (var i = 1; i < this.numX; i++) {
+				for (var j = 1; j < this.numY-1; j++) {
+					if (this.s[i*n + j] != 0.0 && this.s[i*n + j-1] != 0.0)
+						this.v[i*n + j] += gravity * dt;
+				}	 
+			}
+		}
+
+		solveIncompressibility(numIters, dt) {
+
+			var n = this.numY;
+			var cp = this.density * this.h / dt;
+
+			for (var iter = 0; iter < numIters; iter++) {
+
+				for (var i = 1; i < this.numX-1; i++) {
+					for (var j = 1; j < this.numY-1; j++) {
+
+						if (this.s[i*n + j] == 0.0)
+							continue;
+
+						var s = this.s[i*n + j];
+						var sx0 = this.s[(i-1)*n + j];
+						var sx1 = this.s[(i+1)*n + j];
+						var sy0 = this.s[i*n + j-1];
+						var sy1 = this.s[i*n + j+1];
+						var s = sx0 + sx1 + sy0 + sy1;
+						if (s == 0.0)
+							continue;
+
+						var div = this.u[(i+1)*n + j] - this.u[i*n + j] + 
+							this.v[i*n + j+1] - this.v[i*n + j];
+
+						var p = -div / s;
+						p *= scene.overRelaxation;
+						this.p[i*n + j] += cp * p;
+
+						this.u[i*n + j] -= sx0 * p;
+						this.u[(i+1)*n + j] += sx1 * p;
+						this.v[i*n + j] -= sy0 * p;
+						this.v[i*n + j+1] += sy1 * p;
+					}
+				}
+			}
+		}
+
+		extrapolate() {
+			var n = this.numY;
+			for (var i = 0; i < this.numX; i++) {
+				this.u[i*n + 0] = this.u[i*n + 1];
+				this.u[i*n + this.numY-1] = this.u[i*n + this.numY-2]; 
+			}
+			for (var j = 0; j < this.numY; j++) {
+				this.v[0*n + j] = this.v[1*n + j];
+				this.v[(this.numX-1)*n + j] = this.v[(this.numX-2)*n + j] 
+			}
+		}
+
+		sampleField(x, y, field) {
+			var n = this.numY;
+			var h = this.h;
+			var h1 = 1.0 / h;
+			var h2 = 0.5 * h;
+
+			x = Math.max(Math.min(x, this.numX * h), h);
+			y = Math.max(Math.min(y, this.numY * h), h);
+
+			var dx = 0.0;
+			var dy = 0.0;
+
+			var f;
+
+			switch (field) {
+				case U_FIELD: f = this.u; dy = h2; break;
+				case V_FIELD: f = this.v; dx = h2; break;
+				case S_FIELD: f = this.m; dx = h2; dy = h2; break
+
+			}
+
+			var x0 = Math.min(Math.floor((x-dx)*h1), this.numX-1);
+			var tx = ((x-dx) - x0*h) * h1;
+			var x1 = Math.min(x0 + 1, this.numX-1);
+			
+			var y0 = Math.min(Math.floor((y-dy)*h1), this.numY-1);
+			var ty = ((y-dy) - y0*h) * h1;
+			var y1 = Math.min(y0 + 1, this.numY-1);
+
+			var sx = 1.0 - tx;
+			var sy = 1.0 - ty;
+
+			var val = sx*sy * f[x0*n + y0] +
+				tx*sy * f[x1*n + y0] +
+				tx*ty * f[x1*n + y1] +
+				sx*ty * f[x0*n + y1];
+			
+			return val;
+		}
+
+		avgU(i, j) {
+			var n = this.numY;
+			var u = (this.u[i*n + j-1] + this.u[i*n + j] +
+				this.u[(i+1)*n + j-1] + this.u[(i+1)*n + j]) * 0.25;
+			return u;
+				
+		}
+
+		avgV(i, j) {
+			var n = this.numY;
+			var v = (this.v[(i-1)*n + j] + this.v[i*n + j] +
+				this.v[(i-1)*n + j+1] + this.v[i*n + j+1]) * 0.25;
+			return v;
+		}
+
+		advectVel(dt) {
+
+			this.newU.set(this.u);
+			this.newV.set(this.v);
+
+			var n = this.numY;
+			var h = this.h;
+			var h2 = 0.5 * h;
+
+			for (var i = 1; i < this.numX; i++) {
+				for (var j = 1; j < this.numY; j++) {
+
+					cnt++;
+
+					// u component
+					if (this.s[i*n + j] != 0.0 && this.s[(i-1)*n + j] != 0.0 && j < this.numY - 1) {
+						// BC's wont be applied if there are walls!!! 
+						var x = i*h;
+						var y = j*h + h2;
+						var u = this.u[i*n + j];
+						var v = this.avgV(i, j);
+						//var v = this.sampleField(x,y, V_FIELD);
+						x = x - dt*u;
+						y = y - dt*v;
+						u = this.sampleField(x,y, U_FIELD);
+						this.newU[i*n + j] = u;
+						//if (j == 1){ // Bottom boundary. 
+							//f.u[i*n+j] = f.u[i*n+j+1];
+						//}
+						//if (j == n-1){ // Top boundary. 
+							//f.u[i*n+j] = f.u[i*n+j+1];
+						//}
+					}
+					// v component
+					if (this.s[i*n + j] != 0.0 && this.s[i*n + j-1] != 0.0 && i < this.numX - 1) {
+						// BC's wont be applied if there are walls! 
+						var x = i*h + h2;
+						var y = j*h;
+						var u = this.avgU(i, j);
+					//var u = this.sampleField(x,y, U_FIELD);
+						var v = this.v[i*n + j];
+						x = x - dt*u;
+						y = y - dt*v;
+						v = this.sampleField(x,y, V_FIELD);
+						this.newV[i*n + j] = v;
+						//if (j == 1){ // Bottom boundary. 
+							//f.v[i*n+j] = f.v[i*n+j+1]; 
+						//}
+						//if (j == n-1){ // Top boundary. 
+							//f.v[i*n+j] = f.v[i*n+j-1];
+						//}
+					}
+				}	 
+			}
+
+			this.u.set(this.newU);
+			this.v.set(this.newV);
+		}
+
+		advectSmoke(dt) {
+
+			this.newM.set(this.m);
+
+			var n = this.numY;
+			var h = this.h;
+			var h2 = 0.5 * h;
+
+			for (var i = 1; i < this.numX-1; i++) {
+				for (var j = 1; j < this.numY-1; j++) {
+
+					if (this.s[i*n + j] != 0.0) {
+						var u = (this.u[i*n + j] + this.u[(i+1)*n + j]) * 0.5;
+						var v = (this.v[i*n + j] + this.v[i*n + j+1]) * 0.5;
+						var x = i*h + h2 - dt*u;
+						var y = j*h + h2 - dt*v;
+
+						this.newM[i*n + j] = this.sampleField(x,y, S_FIELD);
+ 					}
+				}	 
+			}
+			this.m.set(this.newM);
+		}
+
+		u_mean(x, y, R) {
+			var n = this.numY; // Assuming numY is the number of rows? (height of the grid)
+			var u_mean = 0;
+			// Make sure we don't go out of bounds
+			var startJ = Math.max(y - R, 0);
+			var endJ = Math.min(y + R, n - 1);
+			for (var j = startJ; j <= endJ; j++) {
+				u_mean += this.u[x * n + j];
+			}
+			if (u_mean < 0){
+				u_mean = 0;
+			}
+			// Normalize by the number of terms summed over, which might not always be 2*R
+			return u_mean / (endJ - startJ + 1);
+		}
+
+		v_mean(x, y, R) {
+			var n = this.numY;
+			var v_mean = 0;
+			// Make sure we don't go out of bounds
+			var startJ = Math.max(y - R, 0);
+			var endJ = Math.min(y + R, n - 1);
+			for (var j = startJ; j <= endJ; j++) {
+				v_mean += this.v[x * n + j];
+			}
+			if (v_mean < 0){
+				v_mean = 0;
+			}
+			// Normalize by the number of terms summed over, which might not always be 2*R
+			return v_mean / (endJ - startJ + 1);
+		}
+
+		cos(degrees) {
+    		var radians = degrees * (Math.PI / 180);
+    		return Math.cos(radians);
+		}
+
+		sin(degrees) {
+   			var radians = degrees * (Math.PI / 180); // Convert degrees to radians
+    		return Math.sin(radians); // Calculate sine of the angle in radians
+		}
+
+		AxialInduction(dt, x, y, R, yaw) {
+			// Apply external force due to axial induction, based on actuator disk theory.  
+			var n = this.numY; // Assume numY is defined and is the number of columns
+			var r = (R * 20); // Real Area.  
+			//var r = (R * 20)/3000; // Non-dimensionalized area.  
+			var A = Math.PI * r * r; // Area. Units:cells^2. Need to transform into length!! 
+			var Ct = 4/3; // Check. 
+			var Un = this.u_mean(x, y, R)*this.cos(yaw) + this.v_mean(x, y, R)*this.sin(yaw);
+			var H = Math.round(R*this.cos(yaw));
+			if (H > 0) { // Avoid getting an infinite force when H=0! 
+    			var F = -0.5 * this.density * A * Ct * Un * Un / (2 * H); 
+			} else {
+				var F = 0; // Set force to zero if H is not positive.
+			}
+
+			// Decompose into Fx and Fy. 
+			var Fx = F * this.cos(yaw);
+			var Fy = F * this.sin(yaw); 
+			var jstart = Math.max(y - H, 0); // j location of top bottom cell.  
+			for (var r = -H; r <= H; r++) {
+				var i = Math.round(r * this.sin(yaw)); // Cell displacement.  
+				this.u[(x+i) * n + jstart] += Fx * dt; // 
+				this.v[(x+i) * n + jstart] += Fy * dt; // 
+				jstart+= 1; // 
+			}
+		}
+
+		Diffuse(dt) {
+			var nu = 0.0015; // Check this value. 
+			let uNew = this.u.slice();
+			let vNew = this.v.slice();
+			var n = this.numY; // num row
+			var h = this.h; // delta x, delta y
+
+			for (var i = 2; i < this.numX-1; i++) {// Avoid cells next to entrance/exit.  
+				for (var j = 1; j < this.numY; j++) {
+					
+						// Compute laplacians 
+					var Laplacian_u = (this.u[(i+1)*n + j] - 2*this.u[i*n + j] + this.u[(i-1)*n + j]) / (h * h) + (this.u[i*n+j+1] - 2*this.u[i*n+j] + this.u[i*n+j-1]) / (h * h);
+					var Laplacian_v = (this.v[(i+1)*n+j] - 2*this.v[i*n+j] + this.v[(i-1)*n+j]) / (h * h) + (this.v[i*n+j+1] - 2*this.v[i*n+j] +this.v[i*n+j-1]) / (h * h);
+
+						// Update 
+					this.newU[i*n + j] = this.u[i*n+j] + dt * (nu * Laplacian_u);
+					this.newV[i*n + j] = this.v[i*n+j] + dt * (nu * Laplacian_v);
+					//}
+				}
+			}
+			// Update velocities. 
+			this.u.set(this.newU);  
+			this.v.set(this.newV);
+		}
+
+		simulate(dt,numIters,x_turbine,y_turbine,R_turbine,yaw_turbine) {
+			for (var i=0; i < x_turbine.length; i++) {	// For each turbine
+				this.AxialInduction(dt,x_turbine[i],y_turbine[i],R_turbine[i],yaw_turbine[i]);
+			}
+			this.solveIncompressibility(numIters, dt);
+			this.extrapolate();
+			this.advectVel(dt);
+			this.Diffuse(dt);
+			this.advectSmoke(dt);
+		}
+	}
+	var scene = 
+	{
+		x_turbine : [],
+		y_turbine : [],
+		R_turbine : [],
+		yaw_turbine : [],
+		gravity : 0.0,
+		//dt : 1.0 / 1200, // I needed this value in order to meet CFL condition! Simulation becomes way slower... 
+		//dt : 0.00267,// Real dt=Lref/Uref . Given Uref=8, Lref=1500 -> 1.5625 physical s.
+		dt : 0.002, 
+		numIters : 100, // og: 100
+		frameNr : 0,
+		overRelaxation : 1.9,
+		paused: false,
+		sceneNr: 0,
+		showStreamlines: true,
+		showVelocities: true,	
+		showPressure: false,
+		showSmoke: false,
+		showTurbines: true,
+		fluid: null,
+	};
+
+	function setupScene() 
+	{
+		// Values to modify 
+		var res = 150;
+		// Real Units
+		var domainHeight_real = 3000; 
+		var inVel_real = 8; 
+
+		// Nothing to change from here.. 
+		// Reference(characteristic) magnitudes. 
+		var length_ref = 3000;
+		var velocity_ref= 8;
+
+		// Simulation values 
+		var domainHeight = domainHeight_real/length_ref;
+		var inVel= inVel_real/velocity_ref;
+		var density = 1.0; // Is this correct? kg/m3. 
+
+		// Other calculations. 
+		var domainWidth = domainHeight / simHeight * simWidth;
+		var h = domainHeight / res; // Grid cell size (non-dimensional).
+
+		var numX = Math.floor(domainWidth / h);
+		var numY = Math.floor(domainHeight / h);
+
+		f = scene.fluid = new Fluid(density, numX, numY, h);
+
+		var n = f.numY;
+
+		for (var i = 0; i < f.numX; i++) {
+			for (var j = 0; j < f.numY; j++) {
+				var s = 1.0;	// fluid
+				//if (i == 0 || j == 0 || j == f.numY-1)
+				if (i == 0) // Set wall only at left boundary (flow entrance)
+					s = 0.0;	// solid
+				f.s[i*n + j] = s
+
+				//if (i == 1) {
+					//f.u[i*n + j] = inVel;
+				//}
+				f.u[i*n + j] = inVel;
+			}
+		}
+
+		var pipeH = 0.1 * f.numY;
+		var minJ = Math.floor(0.5 * f.numY - 0.5*pipeH);
+		var maxJ = Math.floor(0.5 * f.numY + 0.5*pipeH);
+
+		for (var j = minJ; j < maxJ; j++)
+			f.m[j] = 0.0;
+
+		document.getElementById("streamButton").checked = scene.showStreamlines;
+		document.getElementById("velocityButton").checked = scene.showVelocities;
+		document.getElementById("pressureButton").checked = scene.showPressure;
+		document.getElementById("smokeButton").checked = scene.showSmoke;
+
+	}
+
+	function AddTurbine() {
+		// Parse the values from the input fields as integers
+		var x = parseInt(document.getElementById('x').value, 10);
+		var y = parseInt(document.getElementById('y').value, 10);
+		var r = parseInt(document.getElementById('r').value, 10);
+		var yaw = parseInt(document.getElementById('yaw').value, 10);
+
+		// Check if the parsed values are numbers (not NaN)
+		if (!isNaN(x) && !isNaN(y) && !isNaN(r) && !isNaN(yaw)) {
+			// Push the new values into the respective arrays
+			scene.x_turbine.push(x);
+			scene.y_turbine.push(y);
+			scene.R_turbine.push(r);
+			scene.yaw_turbine.push(yaw);
+
+			console.log('New turbine positions added');
+			console.log('X coordinates:', scene.x_turbine);
+			console.log('Y coordinates:', scene.y_turbine);
+			console.log('Radious:', scene.R_turbine);
+			console.log('yaw angle:', scene.yaw_turbine);
+		} else {
+			// Alert the user if one or more inputs are not valid numbers
+			alert("Please enter valid integers for X, Y, R, and Yaw.");
+		}
+	}
+
+	// draw -------------------------------------------------------
+
+	function setColor(r, g, b, a = 1) {
+    const rgba = `rgba(${Math.floor(255 * r)}, ${Math.floor(255 * g)}, ${Math.floor(255 * b)}, ${a})`;
+    c.fillStyle = rgba;
+    c.strokeStyle = rgba;
+	}	
+
+	function hueToRGB(val) {
+    	// Use HSL to RGB conversion to get a smooth color spectrum
+    	let f = (n, k = (n + val * 12) % 12) => 0.5 - 0.5 * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+    	let r = f(0);
+    	let g = f(8);
+    	let b = f(4);
+    	return [255 * r, 255 * g, 255 * b, 255]; // Add alpha channel if needed
+	}
+
+	function getSciColor(val, minVal, maxVal) {
+		val = Math.min(Math.max(val, minVal), maxVal);
+		var d = maxVal - minVal;
+		val = d === 0.0 ? 0.5 : (val - minVal) / d;
+		return hueToRGB(val);
+	}
+
+
+	function draw() 
+	{
+		c.clearRect(0, 0, canvas.width, canvas.height);
+
+		c.fillStyle = "#FF0000";
+		f = scene.fluid;
+		n = f.numY;
+
+		var cellScale = 1.1;
+
+		var h = f.h;
+
+		minP = f.p[0];
+		maxP = f.p[0];
+
+		for (var i = 0; i < f.numCells; i++) {
+			minP = Math.min(minP, f.p[i]);
+			maxP = Math.max(maxP, f.p[i]);
+		}
+
+		id = c.getImageData(0,0, canvas.width, canvas.height)
+
+		var color = [255, 255, 255, 255]
+
+		for (var i = 0; i < f.numX; i++) {
+			for (var j = 0; j < f.numY; j++) {
+
+				if (scene.showPressure) {
+					var p = f.p[i*n + j];
+					var s = f.m[i*n + j];
+					color = getSciColor(p, minP, maxP);
+					if (scene.showSmoke) {
+						color[0] = Math.max(0.0, color[0] - 255*s);
+						color[1] = Math.max(0.0, color[1] - 255*s);
+						color[2] = Math.max(0.0, color[2] - 255*s);
+					}
+				}
+				else if (scene.showSmoke) {
+					var s = f.m[i*n + j];
+					color[0] = 155*s;
+					color[1] = 255*s;
+					color[2] = 155*s;
+				}
+
+
+				var x = Math.floor(cX(i * h));
+				var y = Math.floor(cY((j+1) * h));
+				var cx = Math.floor(cScale * cellScale * h) + 1;
+				var cy = Math.floor(cScale * cellScale * h) + 1;
+
+				r = color[0];
+				g = color[1];
+				b = color[2];
+
+				for (var yi = y; yi < y + cy; yi++) {
+					var p = 4 * (yi * canvas.width + x)
+
+					for (var xi = 0; xi < cx; xi++) {
+						id.data[p++] = r;
+						id.data[p++] = g;
+						id.data[p++] = b;
+						id.data[p++] = 255;
+					}
+				}
+			}
+		}
+
+		c.putImageData(id, 0, 0);
+
+		
+		if (scene.showVelocities) {
+
+			var maxVelocity = 0; // Variable to store the maximum velocity magnitude for scaling
+			c.lineWidth = 6;
+
+			// First, determine the maximum velocity magnitude for scaling colors
+			for (var i = 0; i < f.numX; i++) {
+				for (var j = 0; j < f.numY; j++) {
+					var u = f.u[i*n + j];
+					var v = f.v[i*n + j];
+					var velocityMagnitude = Math.sqrt(u*u + v*v);
+					if (velocityMagnitude > maxVelocity) {
+						maxVelocity = velocityMagnitude;
+					}
+				}
+			}
+
+			scale = 0.02;	
+
+			for (var i = 0; i < f.numX; i++) {
+				for (var j = 0; j < f.numY; j++) {
+
+					var u = f.u[i*n + j];
+					var v = f.v[i*n + j];
+					var velocityMagnitude = Math.sqrt(u*u + v*v);
+
+					// Convert velocity magnitude to a hue in the HSV color model
+					var hue = (velocityMagnitude / maxVelocity) * 360; // Scale the magnitude to [0, 360] range for hue
+					c.strokeStyle = `hsl(${hue}, 100%, 75%)`; // Full saturation and 50% lightness
+					c.beginPath();
+
+					var x0 = cX(i * h);
+					var x1 = cX(i * h + u * scale);
+					var y = cY((j + 0.5) * h);
+
+					c.moveTo(x0, y);
+					c.lineTo(x1, y);
+					c.stroke();
+
+					var x = cX((i + 0.5) * h);
+					var y0 = cY(j * h);
+					var y1 = cY(j * h + v * scale)
+
+					c.beginPath();
+					c.moveTo(x, y0);
+					c.lineTo(x, y1);
+					c.stroke();
+
+				}
+			}
+		}
+
+		if (scene.showTurbines) {
+			for (var i = 0; i < scene.x_turbine.length; i++) {
+				var xCenter = cX((scene.x_turbine[i] + 0.5) * h); // Center X of the rectangle
+				var yCenter = cY((scene.y_turbine[i] + 0.5) * h); // Center Y of the rectangle
+				var W = cX(h); // Width of the rectangle
+				var H = 2*(cY(scene.R_turbine[i] * h) - cY(0)); // Height of the rectangle, calculated differently for better clarity
+
+				c.save(); // Save the current context state
+				c.translate(xCenter, yCenter); // Move the rotation center to the center of the rectangle
+				c.rotate(scene.yaw_turbine[i] * Math.PI / 180); // Convert yaw to radians and apply rotation
+
+				// Draw the rectangle centered at the origin after transformations
+				c.beginPath();
+				c.rect(-W / 2, -H / 2, W, H); // Note how the rectangle is centered around the new origin
+				c.fillStyle = 'blue'; // Set the fill color
+				c.fill();
+				c.strokeStyle = 'blue'; // Outline color
+				c.stroke();
+
+				c.restore(); // Restore the context to its original state
+			}
+		}
+
+		if (scene.showStreamlines) {
+
+			var segLen = f.h * 0.3;
+			var numSegs = 15;
+
+			c.strokeStyle = "#000000";
+			c.lineWidth = 1;
+
+
+			for (var i = 1; i < f.numX - 1; i += 5) {
+				for (var j = 1; j < f.numY - 1; j += 5) {
+
+					var x = (i + 0.5) * f.h;
+					var y = (j + 0.5) * f.h;
+
+					c.beginPath();
+					c.moveTo(cX(x), cY(y));
+
+					for (var n = 0; n < numSegs; n++) {
+						var u = f.sampleField(x, y, U_FIELD);
+						var v = f.sampleField(x, y, V_FIELD);
+						l = Math.sqrt(u*u + v*v);
+						x += u/l * segLen;
+						y += v/l * segLen;
+						if (x > f.numX * f.h)
+							break;
+
+						c.lineTo(cX(x), cY(y));
+					}
+					c.stroke();
+				}
+			}
+		}
+
+	}
+	// interaction -------------------------------------------------------
+	document.addEventListener('DOMContentLoaded', function() {
+    	document.getElementById('submitButton').addEventListener('click', AddTurbine);
+	});
+	// main -------------------------------------------------------
+
+	function simulate() 
+	{
+		if (!scene.paused)
+			scene.fluid.simulate(scene.dt, scene.numIters, scene.x_turbine, scene.y_turbine, scene.R_turbine, scene.yaw_turbine)
+			scene.frameNr++;
+	}
+
+	var isUpdating = false;
+	function startUpdateLoop() {
+            isUpdating = true;
+            update();
+	}
+
+	function update() {
+		simulate();
+		draw();
+		requestAnimationFrame(update);
+	}
+	
+
+	setupScene(1);
+	update();
+	
+</script> 
+</body>
+</html>
