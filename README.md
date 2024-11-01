@@ -13,3 +13,5 @@ Example of how to add turbines (introduce the following data into the prompt):
   2. Turbine 2 - x= 120, y=80, R= 6, yaw= 0
   
   3. Turbine 3 - x= 120, y=30, R= 6, yaw= 0
+
+See documentation in documentation.pdf
